@@ -45,11 +45,12 @@ def parse_argv():
 	target = parser.add_argument_group(title='Target')
 	target.add_argument('-compiler', choices=['vs2015', 'vs2017', 'vs2019', 'vs2022', 'vs2019-clang', 'vs2022-clang', 'android', 'clang4', 'clang5', 'clang6', 'clang7', 'clang8', 'clang9', 'clang10', 'clang11', 'clang12', 'clang13', 'clang14', 'clang15', 'clang16', 'clang17', 'clang18', 'gcc4.9', 'gcc5', 'gcc6', 'gcc7', 'gcc8', 'gcc9', 'gcc10', 'gcc11', 'gcc12', 'gcc13', 'osx', 'ios', 'emscripten'], help='Defaults to the host system\'s default compiler')
 	target.add_argument('-config', choices=['Debug', 'Release'], type=str.capitalize)
-	target.add_argument('-cpu', choices=['x86', 'x64', 'armv7', 'arm64', 'wasm'], help='Defaults to the host system\'s architecture')
+	target.add_argument('-cpu', choices=['x86', 'x64', 'armv7', 'arm64', 'arm64ec', 'wasm'], help='Defaults to the host system\'s architecture')
 	target.add_argument('-cpp_version', choices=['11', '14', '17', '20'], help='Defaults to C++11')
 
 	misc = parser.add_argument_group(title='Miscellaneous')
 	misc.add_argument('-avx', dest='use_avx', action='store_true', help='Compile using AVX instructions on Windows, OS X, and Linux')
+	misc.add_argument('-avx2', dest='use_avx2', action='store_true', help='Compile using AVX2 instructions on Windows and Linux')
 	misc.add_argument('-pop', dest='use_popcnt', action='store_true', help='Compile using the POPCNT instruction')
 	misc.add_argument('-nosimd', dest='use_simd', action='store_false', help='Compile without SIMD instructions')
 	misc.add_argument('-simd', dest='use_simd', action='store_true', help='Compile with default SIMD instructions')
@@ -67,7 +68,7 @@ def parse_argv():
 		num_threads = 4
 
 	parser.set_defaults(build=False, clean=False, clean_only=False, unit_test=False, regression_test=False, bench=False, run_bench=False, pull_bench=False,
-		compiler=None, config='Release', cpu=None, cpp_version='11', use_avx=False, use_popcnt=False, use_simd=True, use_sjson=True, allwarnings=False,
+		compiler=None, config='Release', cpu=None, cpp_version='11', use_avx=False, use_avx2=False, use_popcnt=False, use_simd=True, use_sjson=True, allwarnings=False,
 		num_threads=num_threads, tests_matching='')
 
 	args = parser.parse_args()
@@ -75,9 +76,10 @@ def parse_argv():
 	is_arm64_cpu = is_host_cpu_arm64()
 
 	# Sanitize and validate our options
-	if args.use_avx and not args.use_simd:
-		print('SIMD is disabled; AVX cannot be used')
+	if (args.use_avx or args.use_avx2) and not args.use_simd:
+		print('SIMD is explicitly disabled, AVX and AVX2 will not be used')
 		args.use_avx = False
+		args.use_avx2 = False
 
 	if args.compiler == 'android':
 		if not args.cpu:
@@ -87,8 +89,8 @@ def parse_argv():
 			print('Android is only supported on Windows')
 			sys.exit(1)
 
-		if args.use_avx:
-			print('AVX is not supported on Android')
+		if args.use_avx or args.use_avx2:
+			print('AVX and AVX2 are not supported on Android')
 			sys.exit(1)
 
 		if not args.cpu in ['armv7', 'arm64']:
@@ -102,8 +104,8 @@ def parse_argv():
 			print('iOS is only supported on OS X')
 			sys.exit(1)
 
-		if args.use_avx:
-			print('AVX is not supported on iOS')
+		if args.use_avx or args.use_avx2:
+			print('AVX and AVX2 are not supported on iOS')
 			sys.exit(1)
 
 		if args.unit_test:
@@ -125,8 +127,8 @@ def parse_argv():
 			print('Emscripten is only supported on OS X and Linux')
 			sys.exit(1)
 
-		if args.use_avx:
-			print('AVX is not supported with Emscripten')
+		if args.use_avx or args.use_avx2:
+			print('AVX and AVX2 are not supported on Emscripten')
 			sys.exit(1)
 
 		if not args.cpu in ['wasm']:
@@ -153,7 +155,11 @@ def parse_argv():
 			is_arm_supported = True
 
 		if not is_arm_supported:
-			print('arm64 is only supported with VS2017, VS2019, OS X (M1 processors), Linux, Android, and iOS')
+			print('arm64 is only supported with VS2017, VS2019, VS2022, OS X (M* processors), Linux, Android, and iOS')
+			sys.exit(1)
+	elif args.cpu == 'arm64ec':
+		if not args.compiler in ['vs2019', 'vs2022']:
+			print('arm64ec is only supported with VS2019 and VS2022')
 			sys.exit(1)
 	elif args.cpu == 'armv7':
 		if not args.compiler == 'android':
@@ -338,6 +344,10 @@ def do_generate_solution(build_dir, cmake_script_dir, regression_test_data_dir, 
 	cpu = args.cpu
 	config = args.config
 
+	is_arm64_cpu = False
+	if platform.machine() == 'arm64' or platform.machine() == 'aarch64':
+		is_arm64_cpu = True
+
 	if compiler:
 		set_compiler_env(compiler, args)
 
@@ -345,9 +355,17 @@ def do_generate_solution(build_dir, cmake_script_dir, regression_test_data_dir, 
 	extra_switches.append('-DCPU_INSTRUCTION_SET:STRING={}'.format(cpu))
 	extra_switches.append('-DCMAKE_CXX_STANDARD:STRING={}'.format(args.cpp_version))
 
+	if platform.system() == 'Windows' and not is_arm64_cpu:
+		if cpu == 'arm64' or cpu == 'arm64ec':
+			extra_switches.append('-DIS_CROSS_COMPILING:BOOL=true')
+
 	if args.use_avx:
 		print('Enabling AVX usage')
 		extra_switches.append('-DUSE_AVX_INSTRUCTIONS:BOOL=true')
+
+	if args.use_avx2:
+		print('Enabling AVX2 usage')
+		extra_switches.append('-DUSE_AVX2_INSTRUCTIONS:BOOL=true')
 
 	if args.use_popcnt:
 		print('Enabling POPCOUNT usage')
@@ -993,7 +1011,7 @@ if __name__ == "__main__":
 		is_cross_compiling = True
 	elif args.cpu == 'x86' or args.cpu == 'x64':
 		is_cross_compiling = is_host_cpu_arm64()
-	elif args.cpu == 'armv7' or args.cpu == 'arm64':
+	elif args.cpu == 'armv7' or args.cpu == 'arm64' or args.cpu == 'arm64ec':
 		is_cross_compiling = not is_host_cpu_arm64()
 
 	# We always prepare this since for Android/iOS the data is included as part of the executable

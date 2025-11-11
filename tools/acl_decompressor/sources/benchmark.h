@@ -30,6 +30,18 @@
 #include <string>
 #include <vector>
 
+// Whether or not to enable the decompression benchmarks
+#define ACL_IMPL_BENCHMARK_DECOMPRESSION
+
+// Whether or not to enable the bit set iteration benchmarks
+//#define ACL_IMPL_BENCHMARK_BIT_SET_ITERATION
+
+// Whether or not to enable the unpacking benchmarks
+//#define ACL_IMPL_BENCHMARK_UNPACKING
+
+// Whether or not to enable BTB flushing (slow to compile)
+//#define ACL_IMPL_BENCHMARK_ENABLE_BTB_FLUSH
+
 extern acl::ansi_allocator s_allocator;
 
 void clear_benchmark_state();
